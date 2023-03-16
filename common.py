@@ -6,7 +6,7 @@ import tensorflow as tf
 from tensorflow import keras
 import matplotlib.pyplot as plt
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageEnhance
 #import pandas as pd    
 
 
@@ -59,14 +59,17 @@ def displayDS(ds, num, func = lambda x: tf.keras.utils.array_to_img(x), figsize=
     plt.subplots_adjust(wspace=0.1, hspace=0.1)
     plt.show()
 
-def drawCircleImg(img, circ, color='#ff00ff'):
+def drawCircleImg(img, circ, frameName = '', color='#ff00ff'):
     X, Y, R = circ
     if tf.rank(img) != 3:
         img = tf.expand_dims(img, axis=-1)
     II = tf.keras.utils.array_to_img(img)
     II = II.convert(mode='RGB')
+    ehc = ImageEnhance.Brightness(II)
+    II = ehc.enhance(2)
     draw = ImageDraw.Draw(II)
     draw.ellipse([X-R,Y-R,X+R,Y+R], outline=color)
+    tf.print(frameName)
     return II 
 
 def pandas():    
