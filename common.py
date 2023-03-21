@@ -3,12 +3,10 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 
 import os
 import tensorflow as tf
-from tensorflow import keras
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance
 #import pandas as pd    
-
 
 # 0 = all messages are logged (default behavior)
 # 1 = INFO messages are not printed
@@ -16,6 +14,20 @@ from PIL import Image, ImageDraw, ImageEnhance
 # 3 = INFO, WARNING, and ERROR messages are not printed
 #os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 #tf.debugging.set_log_device_placement(True)
+
+class Normalize(tf.Module):
+  def __init__(self, x):
+    # Initialize the mean and standard deviation for normalization
+    self.mean = tf.Variable(tf.math.reduce_mean(x))
+    self.std = tf.Variable(tf.math.reduce_std(x))
+
+  def norm(self, x):
+    # Normalize the input
+    return (x - self.mean)/self.std
+
+  def unnorm(self, x):
+    # Unnormalize the input
+    return (x * self.std) + self.mean
 
 def decode_raw(file_name):
     IMAGE_W = 640
@@ -59,17 +71,23 @@ def displayDS(ds, num, func = lambda x: tf.keras.utils.array_to_img(x), figsize=
     plt.subplots_adjust(wspace=0.1, hspace=0.1)
     plt.show()
 
-def drawCircleImg(img, circ, frameName = '', color='#ff00ff'):
-    X, Y, R = circ
+def drawCircleImg(img, bbox, frameName = '', color='#ff00ff'):
+    X, Y, R = bbox
     if tf.rank(img) != 3:
         img = tf.expand_dims(img, axis=-1)
     II = tf.keras.utils.array_to_img(img)
+    tf.print(X,Y,R)
+    #if Q == 0:
+    #    return II
     II = II.convert(mode='RGB')
     ehc = ImageEnhance.Brightness(II)
     II = ehc.enhance(2)
     draw = ImageDraw.Draw(II)
+    shape = img.shape
+    X, Y, R = X * shape[0], Y * shape[1], R * shape[0]
     draw.ellipse([X-R,Y-R,X+R,Y+R], outline=color)
-    tf.print(frameName)
+    if frameName != '':
+        tf.print(frameName)
     return II 
 
 def pandas():    

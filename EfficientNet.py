@@ -2,9 +2,8 @@ import collections
 import functools, re
 import tensorflow as tf
 import numpy as np
-import tensorflow.keras as keras
-import tensorflow.keras.layers as tfl
-import tensorflow.keras.backend as K
+from keras import layers as tfl
+from keras import backend as K
 from IPython.display import display, Image
 
 GlobalParams = collections.namedtuple('GlobalParams', [
