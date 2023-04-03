@@ -6,6 +6,7 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance
+from IPython.display import display, Image
 #import pandas as pd    
 
 # 0 = all messages are logged (default behavior)
@@ -41,6 +42,11 @@ def decode_png(name):
     bytes = tf.io.read_file(name)
     image = tf.io.decode_png(bytes)
     return tf.image.convert_image_dtype(image, tf.float32)
+
+def displayModel(M):
+    tf.keras.utils.plot_model(M, to_file='model.png', show_shapes=True, 
+          show_layer_activations=True, show_layer_names=True)
+    display(Image('model.png'))
 
 def display3Dtensor(images3D, dims=[5,5]):
     images_arr = tf.split(images3D, images3D.shape[0], axis=0)
