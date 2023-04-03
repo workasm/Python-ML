@@ -4,18 +4,12 @@ import tensorflow as tf
 import numpy as np
 from keras import layers as tfl
 from keras import backend as K
-from IPython.display import display, Image
 
 GlobalParams = collections.namedtuple('GlobalParams', [
-    'batch_norm_momentum', 'batch_norm_epsilon', 'dropout_rate', 'data_format',
-    'num_classes', 'width_coefficient', 'depth_coefficient', 'depth_divisor',
-    'min_depth', 'survival_prob', 'relu_fn', 'batch_norm', 'use_se',
-    'se_coefficient', 'local_pooling', 'condconv_num_experts',
-    'clip_projection_output', 'blocks_args', 'fix_head_stem', 'use_bfloat16'
+    'batch_norm_momentum', 'batch_norm_epsilon', 'dropout_rate', 
+    'survival_prob', 'relu_fn', 'use_se',
+    'se_coefficient', 'clip_projection_output'
 ])
-# Note: the default value of None is not necessarily valid. It is valid to leave
-# width_coefficient, depth_coefficient at None, which is treated as 1.0 (and
-# which also allows depth_divisor and min_depth to be left at None).
 GlobalParams.__new__.__defaults__ = (None,) * len(GlobalParams._fields)
 
 BlockArgs = collections.namedtuple('BlockArgs', [
@@ -23,6 +17,19 @@ BlockArgs = collections.namedtuple('BlockArgs', [
     'expand_ratio', 'id_skip', 'strides', 'se_ratio', 'fused_conv',
     'condconv', 'activation_fn'
 ])
+# example string: 'r1_k3_s11_e6_i192_o320_se0.25'
+# r - num repeats - actually not used but can be adapted to generate several blocks
+# k - conv kernel size
+# i - # of input filters for _expand_conv or _fused_conv
+# o - # of output filters for _project_conv
+# e - expand ratio: filters = input_filters * expand_ratio 
+# noskip - whether to add skip connection (default: yes)
+# se - squeeze-and-excitation ratio
+# s - conv strides: these are actually two numbers without space, hence s11 is default !!
+# f - whether to use fused convolutions instead of depthwise separable convs
+# cc - whether to use condconv (NYI)
+# a - activation function: a0 - relu, a1 - swish, else - None
+
 # defaults will be a public argument for namedtuple in Python 3.7
 # https://docs.python.org/3/library/collections.html#collections.namedtuple
 BlockArgs.__new__.__defaults__ = (None,) * len(BlockArgs._fields)
@@ -60,19 +67,13 @@ def drop_connect(inputs, is_training, survival_prob):
   return output
 
 class MBConvBlock(tfl.Layer):
-  """A class of MBConv: Mobile Inverted Residual Bottleneck.
-  """
-
   def __init__(self, block_args, global_params):
     super(MBConvBlock, self).__init__()
     self._block_args = block_args
-    self._local_pooling = global_params.local_pooling
     self._batch_norm_momentum = global_params.batch_norm_momentum
     self._batch_norm_epsilon = global_params.batch_norm_epsilon
     # NOTE this could use TPU-specific batch norm
     self._batch_norm = tfl.BatchNormalization
-    self._condconv_num_experts = global_params.condconv_num_experts
-    self._data_format = global_params.data_format
     self._se_coefficient = global_params.se_coefficient
 
     self._relu_fn = (self._block_args.activation_fn
@@ -82,54 +83,28 @@ class MBConvBlock(tfl.Layer):
         0 < self._block_args.se_ratio <= 1)
 
     self._clip_projection_output = global_params.clip_projection_output
-
     self.endpoints = None
-
-    #self.conv_cls = tfl.Conv2D
-    #self.depthwise_conv_cls = tfl.DepthwiseConv2D
-    # TODO: disable condconv layers for now..
-    #if self._block_args.condconv:
-    #  self.conv_cls = functools.partial(
-    #      condconv_layers.CondConv2D, num_experts=self._condconv_num_experts)
-    #  self.depthwise_conv_cls = functools.partial(
-    #      condconv_layers.DepthwiseCondConv2D,
-    #      num_experts=self._condconv_num_experts)
 
     # Builds the block accordings to arguments.
     self._build()
 
-  def block_args(self):
-    return self._block_args
-
   def _build(self):
-    
-    if self._block_args.condconv:
-      # Add the example-dependent routing function
-      self._avg_pooling = tf.keras.layers.GlobalAveragePooling2D()
-      self._routing_fn = tf.layers.Dense(
-          self._condconv_num_experts, activation=tf.nn.sigmoid)
-
     filters = self._block_args.input_filters * self._block_args.expand_ratio
     kernel_size = self._block_args.kernel_size
 
     # Fused expansion phase. Called if using fused convolutions.
     self._fused_conv = tfl.Conv2D(
-        filters=filters,
-        kernel_size=kernel_size,
+        filters=filters, kernel_size=kernel_size,
         strides=self._block_args.strides,
         kernel_initializer=conv_kernel_initializer,
-        padding='same',
-        use_bias=False)
+        padding='same', use_bias=False)
 
     # Expansion phase. Called if not using fused convolutions and expansion
     # phase is necessary.
     self._expand_conv = tfl.Conv2D(
-        filters=filters,
-        kernel_size=[1, 1],
-        strides=[1, 1],
+        filters=filters, kernel_size=[1, 1], strides=[1, 1],
         kernel_initializer=conv_kernel_initializer,
-        padding='same',
-        use_bias=False)
+        padding='same', use_bias=False)
         
     self._bn0 = self._batch_norm(
         momentum=self._batch_norm_momentum,
@@ -140,8 +115,7 @@ class MBConvBlock(tfl.Layer):
         kernel_size=kernel_size,
         strides=self._block_args.strides,
         depthwise_initializer=conv_kernel_initializer,
-        padding='same',
-        use_bias=False)
+        padding='same', use_bias=False)
 
     self._bn1 = self._batch_norm(
         momentum=self._batch_norm_momentum,
@@ -151,50 +125,29 @@ class MBConvBlock(tfl.Layer):
       num_reduced_filters = int(self._block_args.input_filters * (
           self._block_args.se_ratio * (self._se_coefficient
                                        if self._se_coefficient else 1)))
-
       num_reduced_filters = max(1, num_reduced_filters)
-      tf.print(num_reduced_filters)
 
       # Squeeze and Excitation layer.
       self._se_reduce = tfl.Conv2D(
-          num_reduced_filters,
-          kernel_size=1,
-          strides=1,
+          num_reduced_filters, kernel_size=1, strides=1,
           kernel_initializer=conv_kernel_initializer,
-          padding='same',
-          use_bias=True)
+          padding='same', use_bias=True)
 
       self._se_expand = tfl.Conv2D(
-          filters,
-          kernel_size=1,
-          strides=1,
+          filters, kernel_size=1, strides=1,
           kernel_initializer=conv_kernel_initializer,
-          padding='same',
-          activation='sigmoid',
-          use_bias=True)
+          padding='same', activation='sigmoid', use_bias=True)
 
     # Output phase.
     filters = self._block_args.output_filters
     self._project_conv = tfl.Conv2D(
-        filters=filters,
-        kernel_size=1,
-        strides=1,
+        filters=filters, kernel_size=1, strides=1,
         kernel_initializer=conv_kernel_initializer,
-        padding='same',
-        use_bias=False)
+        padding='same', use_bias=False)
 
     self._bn2 = self._batch_norm(
         momentum=self._batch_norm_momentum,
         epsilon=self._batch_norm_epsilon)
-
-  def _call_se(self, input):
-    """Call Squeeze and Excitation layer.
-    """
-    x = tfl.GlobalAveragePooling2D(keepdims=True)(input)
-    x = self._se_reduce(x)
-    x = self._relu_fn(x)
-    x = self._se_expand(x)
-    return x * input
 
   def call(self, inputs, training=True, survival_prob=None):
     x = inputs
@@ -203,19 +156,6 @@ class MBConvBlock(tfl.Layer):
     expand_conv_fn = self._expand_conv
     depthwise_conv_fn = self._depthwise_conv
     project_conv_fn = self._project_conv
-
-    # if self._block_args.condconv:
-    #   pooled_inputs = self._avg_pooling(inputs)
-    #   routing_weights = self._routing_fn(pooled_inputs)
-    #   # Capture routing weights as additional input to CondConv layers
-    #   fused_conv_fn = functools.partial(
-    #       self._fused_conv, routing_weights=routing_weights)
-    #   expand_conv_fn = functools.partial(
-    #       self._expand_conv, routing_weights=routing_weights)
-    #   depthwise_conv_fn = functools.partial(
-    #       self._depthwise_conv, routing_weights=routing_weights)
-    #   project_conv_fn = functools.partial(
-    #       self._project_conv, routing_weights=routing_weights)
 
     if self._block_args.fused_conv:
       # If use fused mbconv, skip expansion and use regular conv.
@@ -229,41 +169,34 @@ class MBConvBlock(tfl.Layer):
     x = self._relu_fn(self._bn1(x, training=training))
 
     if self._has_se:
-      x = self._call_se(x)
+      input = x
+      x = tfl.GlobalAveragePooling2D(keepdims=True)(input)
+      x = input * self._se_expand(self._relu_fn(self._se_reduce(x)))
 
     self.endpoints = {'expansion_output': x}
-
     x = self._bn2(project_conv_fn(x), training=training)
     # Add identity so that quantization-aware training can insert quantization
     # ops correctly.
-    x = tf.identity(x)
+    # x = tf.identity(x)
     if self._clip_projection_output:
       x = tf.clip_by_value(x, -6, 6)
     if self._block_args.id_skip:
-      tf.print(f"Using ID skip: {self._block_args.strides}; shapes: {inputs.shape} and {x.shape}")
-      if all(
-          s == 1 for s in self._block_args.strides
-      ) and inputs.shape[-1] == x.shape[-1]:
+      #tf.print(f"Using ID skip: {self._block_args.strides}; shapes: {inputs.shape} and {x.shape}")
+      if all(s == 1 for s in self._block_args.strides) \
+          and inputs.shape[-1] == x.shape[-1]:
         # Apply only if skip connection presents.
         if survival_prob:
           x = drop_connect(x, training, survival_prob)
         x = tf.add(x, inputs)
     return x
 
-  def summary(self, input_shape):
+  def get_summary(self, input_shape):
     x = tfl.Input(shape=input_shape)
-    M = tf.keras.Model(inputs=x, outputs=self.call(x), name='actor')
-    print(M.summary())
-    tf.keras.utils.plot_model(M, to_file='model.png', show_shapes=True, 
-          show_layer_activations=True, show_layer_names=True)
-    display(Image('model.png'))
-
+    return tf.keras.Model(inputs=x, outputs=self.call(x), name='actor')
 
 class BlockDecoder(object):
-  """Block Decoder for readability."""
 
   def _decode_block_string(self, block_string):
-    """Gets a block through a string notation of arguments."""
     ops = block_string.split('_')
     options = {}
     for op in ops:
@@ -290,15 +223,23 @@ class BlockDecoder(object):
         activation_fn=(tf.nn.relu if int(options['a']) == 0
                        else tf.nn.swish) if 'a' in options else None)
 
-  def decode(self, string_list):
-    """Decodes a list of string notations to specify blocks inside the network.
-    Args:
-      string_list: a list of strings, each string is a notation of block.
-    Returns:
-      A list of namedtuples to represent blocks arguments.
-    """
-    assert isinstance(string_list, list)
-    blocks_args = []
-    for block_string in string_list:
-      blocks_args.append(self._decode_block_string(block_string))
-    return blocks_args
+  def __call__(self, string_list):
+    return [self._decode_block_string(s) for s in string_list]
+
+class Model:
+  def __init__(self, global_args, block_string):
+    block_args = BlockDecoder()(block_string)
+
+    self.global_args = global_args
+    self.blocks = []
+    for blk in block_args:
+      for _ in range(blk.num_repeat):
+        self.blocks.append(MBConvBlock(blk, global_args))
+
+  def __call__(self, inputs, training=None):
+    X = inputs
+    survival_prob = self.global_args.survival_prob
+    for block in self.blocks:
+      X = block.call(X, training=training, survival_prob=survival_prob)
+    
+    return tf.keras.Model(inputs=inputs, outputs=X)
