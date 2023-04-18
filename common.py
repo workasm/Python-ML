@@ -16,6 +16,57 @@ from IPython.display import display, Image
 #os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 #tf.debugging.set_log_device_placement(True)
 
+def read_bcrf(filepath):
+    with open(filepath, 'rb') as f:
+        header = f.read(4096).decode('utf-8', 'ignore').split('\n')
+        data = f.read()
+        
+    output = {}
+    xcvt,ycvt,zcvt = 1,1,1
+    for item in header:
+        item = item.replace('\x00', '')
+        val = item[item.find('=') + 1:]
+
+        if item.find('xpixels') != -1:
+            output['x-pixels'] = int(val)
+        elif item.find('ypixels') != -1:
+            output['y-pixels'] = int(val)
+        elif item.find('xlength') != -1:
+            output['x-length'] = float(val)
+        elif item.find('ylength') != -1:
+            output['y-length'] = float(val)
+        elif item.find('zunit') != -1:
+            if 'nm' in item:
+                zcvt = 1000
+            elif 'um' in item:
+                zcvt = 1
+            else:
+                zcvt = 1
+        elif item.find('xunit') != -1:
+            if 'nm' in item:
+                xcvt = 1000000
+            elif 'um' in item:
+                xcvt = 1000
+        elif item.find('yunit') != -1:
+            if 'nm' in item:
+                ycvt = 1000000
+            elif 'um' in item:
+                ycvt = 1000
+    
+    #convert length data to mm
+    output['x-length'] = output['x-length'] / xcvt
+    output['y-length'] = output['y-length'] / ycvt
+
+    num = len(data)//4
+    fdata = np.frombuffer(data, dtype=np.float32, count=num)
+    fdata = np.reshape(fdata, 
+                    (output['y-pixels'], output['x-pixels'])) / zcvt
+    #replace void markers with nan values
+    output['Data'] = np.where(fdata == (3.4028234663852886e+38/zcvt), 
+                    np.nan, fdata) #3...e38 represents void in bcrf
+    output['filename'] = str(os.path.basename(filepath))
+    return output
+
 class Normalize(tf.Module):
   def __init__(self, x):
     # Initialize the mean and standard deviation for normalization
@@ -65,7 +116,7 @@ def displayImages(images_arr, dims=[5,5]):
 
 def displayDS(ds, num, func = lambda x: tf.keras.utils.array_to_img(x), figsize=(10, 10), columns=3):
     rows = (num + columns - 1)//columns
-    _, axs = plt.subplots(rows, columns, figsize=(12, 12))
+    _, axs = plt.subplots(rows, columns, figsize=(12, 12), squeeze=False)
     axs = axs.flatten()
     for i, item in zip(range(num), ds):
         img = func(*item)
